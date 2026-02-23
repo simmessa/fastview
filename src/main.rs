@@ -75,6 +75,27 @@ impl AppState {
         let window = Arc::new(window);
         let size = window.inner_size();
         
+        let args: Vec<String> = std::env::args().collect();
+        let input_path = if args.len() > 1 {
+            PathBuf::from(&args[1])
+        } else {
+            PathBuf::from(".")
+        };
+
+        // Start File System scan and Cache initialization in parallel with WGPU setup
+        let (init_tx, init_rx) = unbounded::<(ImageLoader, CacheManager)>();
+        thread::spawn(move || {
+            let input_path = std::fs::canonicalize(&input_path).unwrap_or(input_path);
+            let (loader_path, _) = if input_path.is_file() {
+                (input_path.parent().unwrap_or(Path::new(".")).to_path_buf(), Some(input_path.clone()))
+            } else {
+                (input_path, None)
+            };
+            let loader = ImageLoader::new(loader_path);
+            let cache = CacheManager::new();
+            let _ = init_tx.send((loader, cache));
+        });
+
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(Arc::clone(&window)).expect("Failed to create surface");
 
@@ -97,42 +118,29 @@ impl AppState {
         )).expect("Failed to create device");
 
         let renderer = Renderer::new(device, queue, adapter, surface, size.width, size.height);
-        
-        let args: Vec<String> = std::env::args().collect();
-        let input_path = if args.len() > 1 {
-            PathBuf::from(&args[1])
-        } else {
-            PathBuf::from(".")
-        };
 
-        // Canonicalize input path immediately
-        let input_path = std::fs::canonicalize(&input_path).unwrap_or(input_path);
-
-        let (loader_path, initial_file) = if input_path.is_file() {
-            (input_path.parent().unwrap_or(Path::new(".")).to_path_buf(), Some(input_path.clone()))
-        } else {
-            (input_path, None)
-        };
-
-        let image_loader = ImageLoader::new(loader_path);
         let input_handler = InputHandler::new();
-        let cache = CacheManager::new();
 
-        // Setup background loader
+        // Setup background loader channels
         let (loader_tx, loader_rx) = unbounded::<Vec<LoaderRequest>>();
         let (response_tx, response_rx) = unbounded::<LoaderResponse>();
         let (visible_indices_tx, visible_indices_rx) = unbounded::<Vec<usize>>();
         
+        // Wait for FS/Cache init (usually near-instant, but now parallelized with WGPU)
+        let (image_loader, cache) = init_rx.recv().expect("Failed to initialize FS/Cache");
+        let initial_file = if args.len() > 1 {
+            let p = PathBuf::from(&args[1]);
+            if p.is_file() { Some(std::fs::canonicalize(&p).unwrap_or(p)) } else { None }
+        } else {
+            None
+        };
+
         // Spawn background thread for image loading
         let cache_for_thread = cache.clone_db_handle(); 
         thread::spawn(move || {
             let mut pending_requests: Vec<LoaderRequest> = Vec::new();
             let mut visible_indices: Vec<usize> = Vec::new();
-
-            // Load font
-            let font = std::fs::read("C:\\Windows\\Fonts\\arial.ttf")
-                .ok()
-                .and_then(|data| FontArc::try_from_vec(data).ok());
+            let mut font: Option<FontArc> = None;
 
             loop {
                 // Check for new requests
@@ -148,6 +156,13 @@ impl AppState {
                 if pending_requests.is_empty() {
                     thread::sleep(std::time::Duration::from_millis(10));
                     continue;
+                }
+
+                // Lazy load font on first use
+                if font.is_none() {
+                    font = std::fs::read("C:\\Windows\\Fonts\\arial.ttf")
+                        .ok()
+                        .and_then(|data| FontArc::try_from_vec(data).ok());
                 }
 
                 // Re-prioritize: items in visible_indices first

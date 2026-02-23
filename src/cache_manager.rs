@@ -20,9 +20,16 @@ impl CacheManager {
         self.clone()
     }
     pub fn new() -> Self {
-        let mut exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
-        exe_path.pop();
-        let db_path = exe_path.join("fastview_cache");
+        let cache_dir = if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+            PathBuf::from(local_appdata).join("fastview")
+        } else {
+            let mut exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+            exe_path.pop();
+            exe_path
+        };
+        
+        let db_path = cache_dir.join("fastview_cache");
+        std::fs::create_dir_all(&cache_dir).ok();
         
         let db = sled::open(db_path).expect("Failed to open cache database");
         CacheManager { db }
