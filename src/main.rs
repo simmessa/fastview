@@ -538,6 +538,9 @@ impl AppState {
                     self.move_selection_by_page(1);
                 }
             }
+            InputAction::Exit => {
+                std::process::exit(0);
+            }
         }
 
         match &event {
