@@ -85,13 +85,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     var color = textureSample(t_diffuse, s_diffuse, in.uv);
     
-    if (params.is_grid_item > 0.5) {
-        let border = 0.03;
+    if (params.is_grid_item > 0.5 && params.is_selected > 0.5) {
+        let border = 2.0 / params.zoom;
         if (in.quad_uv.x < border || in.quad_uv.x > (1.0 - border) || in.quad_uv.y < border || in.quad_uv.y > (1.0 - border)) {
-            if (params.is_selected > 0.5) {
-                return vec4<f32>(1.0, 0.8, 0.1, 1.0); // Vibrant orange for selection
-            }
-            return vec4<f32>(0.4, 0.4, 0.5, 1.0);
+            return vec4<f32>(1.0, 0.8, 0.1, 1.0); // Vibrant orange for selection
         }
     }
     

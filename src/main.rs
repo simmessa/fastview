@@ -9,17 +9,19 @@ use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{WindowEvent},
-    event_loop::{ActiveEventLoop, EventLoop},
-    window::{Window, WindowId},
+    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
+    window::{Window, WindowId, UserAttentionType},
 };
 use std::path::{PathBuf, Path};
 use std::sync::{Arc};
 use std::thread;
+use std::io::{Read, Write};
 use crossbeam_channel::{unbounded, Sender, Receiver};
 use image::{RgbaImage, Rgba};
 use imageproc::drawing::{draw_text_mut, draw_filled_rect_mut};
 use imageproc::rect::Rect;
 use ab_glyph::{FontArc, PxScale};
+use interprocess::local_socket::{LocalSocketListener, LocalSocketStream, NameTypeSupport};
 
 use renderer::Renderer;
 use image_loader::{ImageLoader, FileItem};
@@ -30,6 +32,11 @@ use cache_manager::{CacheManager};
 enum ViewMode {
     Grid,
     Single,
+}
+
+#[derive(Debug)]
+enum UserEvent {
+    OpenPath(PathBuf),
 }
 
 struct LoaderRequest {
@@ -64,7 +71,7 @@ struct AppState {
 }
 
 impl AppState {
-    fn new(window: Window) -> AppState {
+    fn new(window: Window, event_loop_proxy: EventLoopProxy<UserEvent>) -> AppState {
         let window = Arc::new(window);
         let size = window.inner_size();
         
@@ -116,7 +123,7 @@ impl AppState {
         let (response_tx, response_rx) = unbounded::<LoaderResponse>();
         let (visible_indices_tx, visible_indices_rx) = unbounded::<Vec<usize>>();
         
-        // Spawn background thread
+        // Spawn background thread for image loading
         let cache_for_thread = cache.clone_db_handle(); 
         thread::spawn(move || {
             let mut pending_requests: Vec<LoaderRequest> = Vec::new();
@@ -190,6 +197,35 @@ impl AppState {
             }
         });
 
+        // Spawn IPC listener thread
+        thread::spawn(move || {
+            let name = "fastview_ipc";
+            let name = if NameTypeSupport::query().paths_supported() {
+                format!("/tmp/{}.sock", name)
+            } else {
+                name.to_string()
+            };
+
+            let listener = match LocalSocketListener::bind(name.clone()) {
+                Ok(l) => l,
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    // Try to re-bind if previous instance crashed
+                    let _ = std::fs::remove_file(&name);
+                    LocalSocketListener::bind(name).expect("Failed to bind IPC socket")
+                }
+                Err(e) => panic!("IPC bind error: {}", e),
+            };
+
+            for conn in listener.incoming().filter_map(|c| c.ok()) {
+                let mut conn = conn;
+                let mut buf = String::new();
+                if conn.read_to_string(&mut buf).is_ok() {
+                    let path = PathBuf::from(buf.trim());
+                    let _ = event_loop_proxy.send_event(UserEvent::OpenPath(path));
+                }
+            }
+        });
+
         let mut app_state = AppState {
             window,
             renderer,
@@ -209,24 +245,48 @@ impl AppState {
         app_state.load_grid();
 
         if let Some(file_path) = initial_file {
-            if let Some(img) = app_state.image_loader.open_image(&file_path) {
-                app_state.selected_index = app_state.image_loader.get_items().iter().position(|item| {
-                    match item {
-                        FileItem::Image(p) => p == &file_path,
-                        _ => false,
-                    }
-                }).unwrap_or(0);
-                
-                app_state.renderer.update_texture(&img);
-                app_state.set_zoom_to_fit();
-                app_state.renderer.set_view_mode(false);
-                app_state.mode = ViewMode::Single;
-            }
+            app_state.open_image_internal(&file_path);
         }
 
         app_state.update_window_title();
         app_state.window.request_redraw();
         app_state
+    }
+
+    fn open_path(&mut self, path: PathBuf) {
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        
+        if path.is_file() {
+            let parent = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+            self.image_loader.set_path(parent);
+            self.load_grid();
+            self.open_image_internal(&path);
+        } else {
+            self.image_loader.set_path(path);
+            self.load_grid();
+            self.mode = ViewMode::Grid;
+            self.renderer.set_view_mode(true);
+        }
+        
+        self.update_window_title();
+        self.window.request_redraw();
+        self.window.request_user_attention(Some(UserAttentionType::Critical));
+    }
+
+    fn open_image_internal(&mut self, file_path: &Path) {
+        if let Some(img) = self.image_loader.open_image(file_path) {
+            self.selected_index = self.image_loader.get_items().iter().position(|item| {
+                match item {
+                    FileItem::Image(p) => p == file_path,
+                    _ => false,
+                }
+            }).unwrap_or(0);
+            
+            self.renderer.update_texture(&img);
+            self.set_zoom_to_fit();
+            self.renderer.set_view_mode(false);
+            self.mode = ViewMode::Single;
+        }
     }
 
     fn set_zoom_to_fit(&mut self) {
@@ -562,9 +622,10 @@ impl AppState {
 
 struct App {
     state: Option<AppState>,
+    event_loop_proxy: EventLoopProxy<UserEvent>,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_none() {
             let window_attributes = Window::default_attributes()
@@ -572,7 +633,7 @@ impl ApplicationHandler for App {
                 .with_inner_size(LogicalSize::new(1280, 720));
             
             let window = event_loop.create_window(window_attributes).expect("Failed to create window");
-            self.state = Some(AppState::new(window));
+            self.state = Some(AppState::new(window, self.event_loop_proxy.clone()));
         }
     }
 
@@ -581,11 +642,42 @@ impl ApplicationHandler for App {
             state.handle_window_event(event);
         }
     }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        if let Some(state) = &mut self.state {
+            match event {
+                UserEvent::OpenPath(path) => {
+                    state.open_path(path);
+                }
+            }
+        }
+    }
 }
 
 fn main() {
     env_logger::init();
-    let event_loop = EventLoop::new().unwrap();
-    let mut app = App { state: None };
+    
+    let args: Vec<String> = std::env::args().collect();
+    let name = "fastview_ipc";
+    let name = if NameTypeSupport::query().paths_supported() {
+        format!("/tmp/{}.sock", name)
+    } else {
+        name.to_string()
+    };
+
+    // Try to connect to existing instance
+    if let Ok(mut stream) = LocalSocketStream::connect(name.clone()) {
+        let path = if args.len() > 1 {
+            args[1].clone()
+        } else {
+            ".".to_string()
+        };
+        let _ = stream.write_all(path.as_bytes());
+        return;
+    }
+
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
+    let event_loop_proxy = event_loop.create_proxy();
+    let mut app = App { state: None, event_loop_proxy };
     event_loop.run_app(&mut app).unwrap();
 }
