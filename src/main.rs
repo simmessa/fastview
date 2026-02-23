@@ -26,7 +26,7 @@ use interprocess::local_socket::{LocalSocketListener, LocalSocketStream, NameTyp
 use renderer::Renderer;
 use image_loader::{ImageLoader, FileItem};
 use input_handler::{InputHandler, InputAction};
-use cache_manager::{CacheManager};
+use cache_manager::{CacheManager, WindowSettings};
 
 #[derive(PartialEq)]
 enum ViewMode {
@@ -55,6 +55,7 @@ struct AppState {
     renderer: Renderer,
     image_loader: ImageLoader,
     input_handler: InputHandler,
+    cache: CacheManager,
     mode: ViewMode,
     
     // Background loading
@@ -71,7 +72,7 @@ struct AppState {
 }
 
 impl AppState {
-    fn new(window: Window, event_loop_proxy: EventLoopProxy<UserEvent>) -> AppState {
+    fn new(window: Window, event_loop_proxy: EventLoopProxy<UserEvent>, cache: CacheManager) -> AppState {
         let window = Arc::new(window);
         let size = window.inner_size();
         
@@ -82,18 +83,18 @@ impl AppState {
             PathBuf::from(".")
         };
 
-        // Start File System scan and Cache initialization in parallel with WGPU setup
-        let (init_tx, init_rx) = unbounded::<(ImageLoader, CacheManager)>();
+        // Start File System scan in parallel with WGPU setup
+        let (init_tx, init_rx) = unbounded::<ImageLoader>();
+        let input_path_thread = input_path.clone();
         thread::spawn(move || {
-            let input_path = std::fs::canonicalize(&input_path).unwrap_or(input_path);
+            let input_path = std::fs::canonicalize(&input_path_thread).unwrap_or(input_path_thread);
             let (loader_path, _) = if input_path.is_file() {
                 (input_path.parent().unwrap_or(Path::new(".")).to_path_buf(), Some(input_path.clone()))
             } else {
                 (input_path, None)
             };
             let loader = ImageLoader::new(loader_path);
-            let cache = CacheManager::new();
-            let _ = init_tx.send((loader, cache));
+            let _ = init_tx.send(loader);
         });
 
         let instance = wgpu::Instance::default();
@@ -126,8 +127,8 @@ impl AppState {
         let (response_tx, response_rx) = unbounded::<LoaderResponse>();
         let (visible_indices_tx, visible_indices_rx) = unbounded::<Vec<usize>>();
         
-        // Wait for FS/Cache init (usually near-instant, but now parallelized with WGPU)
-        let (image_loader, cache) = init_rx.recv().expect("Failed to initialize FS/Cache");
+        // Wait for FS init
+        let image_loader = init_rx.recv().expect("Failed to initialize FS");
         let initial_file = if args.len() > 1 {
             let p = PathBuf::from(&args[1]);
             if p.is_file() { Some(std::fs::canonicalize(&p).unwrap_or(p)) } else { None }
@@ -246,6 +247,7 @@ impl AppState {
             renderer,
             image_loader,
             input_handler,
+            cache,
             mode: ViewMode::Grid,
             loader_tx,
             response_rx,
@@ -285,6 +287,10 @@ impl AppState {
         
         self.update_window_title();
         self.window.request_redraw();
+        
+        // Bring to foreground
+        self.window.set_minimized(false);
+        self.window.focus_window();
         self.window.request_user_attention(Some(UserAttentionType::Critical));
     }
 
@@ -564,13 +570,29 @@ impl AppState {
             }
             WindowEvent::Resized(new_size) => {
                 self.renderer.resize(new_size.width, new_size.height);
+                self.save_window_state();
                 self.update_viewport();
                 self.window.request_redraw();
+            }
+            WindowEvent::Moved(_) => {
+                self.save_window_state();
             }
             WindowEvent::RedrawRequested => {
                 self.renderer.render(self.mode == ViewMode::Grid, if self.mode == ViewMode::Grid { Some(self.selected_index) } else { None });
             }
             _ => {}
+        }
+    }
+
+    fn save_window_state(&self) {
+        if let Ok(pos) = self.window.outer_position() {
+            let size = self.window.inner_size();
+            self.cache.set_window_settings(&WindowSettings {
+                x: pos.x,
+                y: pos.y,
+                width: size.width,
+                height: size.height,
+            });
         }
     }
 
@@ -641,17 +663,25 @@ impl AppState {
 struct App {
     state: Option<AppState>,
     event_loop_proxy: EventLoopProxy<UserEvent>,
+    cache: CacheManager,
 }
 
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_none() {
-            let window_attributes = Window::default_attributes()
+            let mut window_attributes = Window::default_attributes()
                 .with_title("FastView")
                 .with_inner_size(LogicalSize::new(1280, 720));
             
+            // Restore window state
+            if let Some(settings) = self.cache.get_window_settings() {
+                window_attributes = window_attributes
+                    .with_inner_size(LogicalSize::new(settings.width, settings.height))
+                    .with_position(winit::dpi::PhysicalPosition::new(settings.x, settings.y));
+            }
+            
             let window = event_loop.create_window(window_attributes).expect("Failed to create window");
-            self.state = Some(AppState::new(window, self.event_loop_proxy.clone()));
+            self.state = Some(AppState::new(window, self.event_loop_proxy.clone(), self.cache.clone()));
         }
     }
 
@@ -694,8 +724,9 @@ fn main() {
         return;
     }
 
+    let cache = CacheManager::new();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     let event_loop_proxy = event_loop.create_proxy();
-    let mut app = App { state: None, event_loop_proxy };
+    let mut app = App { state: None, event_loop_proxy, cache };
     event_loop.run_app(&mut app).unwrap();
 }

@@ -10,6 +10,14 @@ pub struct CacheEntry {
     pub thumbnail_data: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct WindowSettings {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Clone)]
 pub struct CacheManager {
     db: Db,
@@ -65,5 +73,17 @@ impl CacheManager {
             thumbnail_data: img.to_vec(),
         };
         self.set(path, entry);
+    }
+
+    pub fn get_window_settings(&self) -> Option<WindowSettings> {
+        let result = self.db.get("window_settings").ok()??;
+        bincode::deserialize(&result).ok()
+    }
+
+    pub fn set_window_settings(&self, settings: &WindowSettings) {
+        if let Ok(data) = bincode::serialize(settings) {
+            let _ = self.db.insert("window_settings", data);
+            let _ = self.db.flush();
+        }
     }
 }
