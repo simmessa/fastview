@@ -299,21 +299,25 @@ impl Renderer {
         self.grid_scroll = 0.0;
     }
 
+    pub fn scroll_grid(&mut self, dy: f32) {
+        let grid_size = 250.0;
+        let spacing = 20.0;
+        let window_width = self.params.window_size[0];
+        let window_height = self.params.window_size[1];
+        
+        let cols = (window_width / (grid_size + spacing)).floor().max(1.0) as u32;
+        let rows = (self.grid_items.len() as f32 / cols as f32).ceil();
+        let content_height = rows * (grid_size + spacing) + spacing;
+        
+        let max_scroll = (content_height - window_height).max(0.0);
+        
+        self.grid_scroll += dy;
+        self.grid_scroll = self.grid_scroll.clamp(-max_scroll, 0.0);
+    }
+
     pub fn zoom(&mut self, amount: f32) {
         if self.params.is_grid_item > 0.5 {
-            let grid_size = 250.0;
-            let spacing = 20.0;
-            let window_width = self.params.window_size[0];
-            let window_height = self.params.window_size[1];
-            
-            let cols = (window_width / (grid_size + spacing)).floor().max(1.0) as u32;
-            let rows = (self.grid_items.len() as f32 / cols as f32).ceil();
-            let content_height = rows * (grid_size + spacing) + spacing;
-            
-            let max_scroll = (content_height - window_height).max(0.0);
-            
-            self.grid_scroll += amount * 100.0;
-            self.grid_scroll = self.grid_scroll.clamp(-max_scroll, 0.0);
+            self.scroll_grid(amount * 100.0);
             return;
         }
         let factor = 1.1f32;

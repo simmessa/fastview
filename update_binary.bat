@@ -1,0 +1,1 @@
+xcopy .\target\release\fastview.exe "C:\Cozy\Portable apps\Fastview\" /Y

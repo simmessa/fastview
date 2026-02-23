@@ -17,6 +17,8 @@ pub enum InputAction {
     SelectLeft,
     SelectRight,
     OpenSelected,
+    PageUp,
+    PageDown,
 }
 
 pub struct InputHandler {
@@ -83,6 +85,8 @@ impl InputHandler {
                     NamedKey::MediaTrackPrevious => return InputAction::PrevImage,
                     NamedKey::Backspace | NamedKey::Escape => return InputAction::Back,
                     NamedKey::Enter => return InputAction::OpenSelected,
+                    NamedKey::PageUp => return InputAction::PageUp,
+                    NamedKey::PageDown => return InputAction::PageDown,
                     _ => {}
                 }
             }

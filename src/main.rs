@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod renderer;
 mod image_loader;
 mod input_handler;
@@ -166,7 +168,7 @@ impl AppState {
                     if let Some(img) = cache_for_thread.get_thumbnail(&request.path) {
                         thumb_opt = Some(img);
                     } else if let Some(img) = ImageLoader::load_dynamic_image_path(&request.path) {
-                        let thumb = img.thumbnail_exact(256, 256).to_rgba8();
+                        let thumb = img.resize_to_fill(256, 256, image::imageops::FilterType::Triangle).to_rgba8();
                         cache_for_thread.set_thumbnail(&request.path, &thumb);
                         thumb_opt = Some(thumb);
                     }
@@ -466,6 +468,16 @@ impl AppState {
                     }
                 }
             }
+            InputAction::PageUp => {
+                if self.mode == ViewMode::Grid {
+                    self.move_selection_by_page(-1);
+                }
+            }
+            InputAction::PageDown => {
+                if self.mode == ViewMode::Grid {
+                    self.move_selection_by_page(1);
+                }
+            }
         }
 
         match &event {
@@ -504,6 +516,30 @@ impl AppState {
         if index >= 0 && index < total_items as i32 {
             self.selected_index = index as usize;
             self.renderer.scroll_to_item(self.selected_index);
+            self.update_viewport(); // Ensure thumbnails start loading for new view
+            self.window.request_redraw();
+        }
+    }
+
+    fn move_selection_by_page(&mut self, dir: i32) {
+        let total_items = self.image_loader.get_items().len();
+        if total_items == 0 { return; }
+
+        let grid_size = 250.0;
+        let spacing = 20.0;
+        let [win_width, win_height] = self.renderer.get_window_size();
+        
+        let cols = (win_width / (grid_size + spacing)).floor().max(1.0) as u32;
+        let rows_per_page = (win_height / (grid_size + spacing)).floor().max(1.0) as u32;
+        let items_per_page = (rows_per_page * cols) as i32;
+
+        let mut index = self.selected_index as i32 + dir * items_per_page;
+        index = index.clamp(0, total_items as i32 - 1);
+
+        if self.selected_index != index as usize {
+            self.selected_index = index as usize;
+            self.renderer.scroll_to_item(self.selected_index);
+            self.update_viewport();
             self.window.request_redraw();
         }
     }
