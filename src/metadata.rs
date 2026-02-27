@@ -122,20 +122,17 @@ impl ImageMetadata {
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();
 
-        let exif = match extension.as_str() {
-            "jpg" | "jpeg" => Self::read_exif_data(path),
-            _ => None,
+        let (exif, prompt) = match extension.as_str() {
+            "jpg" | "jpeg" => (Self::read_exif_data(path), None),
+            "png" => (None, Self::read_png_prompt(path)),
+            "webp" => (None, Self::read_webp_prompt(path)),
+            _ => (None, None),
         };
 
         let orientation = exif
             .as_ref()
             .map(|e| e.orientation)
             .unwrap_or(ExifOrientation::Normal);
-
-        let prompt = match extension.as_str() {
-            "png" => Self::read_png_prompt(path),
-            _ => None,
-        };
 
         ImageMetadata {
             orientation,
@@ -147,14 +144,12 @@ impl ImageMetadata {
     pub fn get_metadata_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
 
-        // EXIF data as key-value pairs
         if let Some(ref exif) = self.exif {
             for (key, value) in exif.to_key_values() {
                 lines.push(format!("{}: {}", key, value));
             }
         }
 
-        // ComfyUI workflow detection and prompt extraction
         if let Some(ref prompt) = self.prompt {
             if prompt.trim().starts_with('{') {
                 lines.push("".to_string());
@@ -254,7 +249,6 @@ impl ImageMetadata {
             Err(_) => return None,
         };
 
-        // First check for tEXt with "Prompt" key
         for chunk in png.chunks() {
             let kind = chunk.kind();
             if kind == *b"tEXt" || kind == *b"iTXt" {
@@ -266,17 +260,14 @@ impl ImageMetadata {
             }
         }
 
-        // Try to find JSON workflow and extract prompt
         for chunk in png.chunks() {
             let kind = chunk.kind();
             if kind == *b"tEXt" || kind == *b"iTXt" {
                 if let Ok(text) = std::str::from_utf8(chunk.contents()) {
                     if let Some(pos) = text.find('\0') {
                         let value = &text[pos + 1..];
-                        // Check if it looks like JSON
                         if value.trim().starts_with('{') {
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(value) {
-                                // Try to extract prompt from ComfyUI workflow
                                 if let Some(prompt) = Self::extract_comfyui_prompt(&json) {
                                     return Some(prompt);
                                 }
@@ -287,7 +278,6 @@ impl ImageMetadata {
             }
         }
 
-        // Fallback: look for any text that looks like a prompt
         for chunk in png.chunks() {
             let kind = chunk.kind();
             if kind == *b"tEXt" {
@@ -310,28 +300,111 @@ impl ImageMetadata {
         None
     }
 
+    fn read_webp_prompt(path: &Path) -> Option<String> {
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(_) => return None,
+        };
+
+        let mut reader = BufReader::new(file);
+        let mut bytes = Vec::new();
+        if reader.read_to_end(&mut bytes).is_err() {
+            return None;
+        }
+
+        let mut offset = 0;
+        while offset < bytes.len().saturating_sub(12) {
+            if bytes[offset..offset + 4] == [0x52, 0x49, 0x46, 0x46] {
+                let chunk_size = u32::from_le_bytes([
+                    bytes[offset + 4],
+                    bytes[offset + 5],
+                    bytes[offset + 6],
+                    bytes[offset + 7],
+                ]) as usize;
+                let chunk_type = std::str::from_utf8(&bytes[offset + 8..offset + 12]).unwrap_or("");
+
+                if chunk_type == "WEBP" {
+                    let mut inner = offset + 12;
+                    while inner < offset + 12 + chunk_size && inner < bytes.len().saturating_sub(8)
+                    {
+                        let sub_type = std::str::from_utf8(&bytes[inner..inner + 4]).unwrap_or("");
+                        let sub_size = u32::from_le_bytes([
+                            bytes[inner + 4],
+                            bytes[inner + 5],
+                            bytes[inner + 6],
+                            bytes[inner + 7],
+                        ]) as usize;
+
+                        if sub_type == "EXIF" {
+                            let exif_data = &bytes[inner + 8..inner + 8 + sub_size];
+
+                            let cursor = std::io::Cursor::new(exif_data);
+                            let mut exif_reader = BufReader::new(cursor);
+
+                            if let Ok(exif) =
+                                exif::Reader::new().read_from_container(&mut exif_reader)
+                            {
+                                if let Some(field) =
+                                    exif.get_field(exif::Tag::ImageDescription, exif::In::PRIMARY)
+                                {
+                                    let value = field.display_value().to_string();
+
+                                    let unescaped = value
+                                        .trim_matches('"')
+                                        .replace("\\\"", "\"")
+                                        .replace("\\n", "\n")
+                                        .replace("\\t", "\t");
+
+                                    let json_str = unescaped.trim_start_matches("Workflow:").trim();
+
+                                    if json_str.starts_with('{') {
+                                        if let Ok(json) =
+                                            serde_json::from_str::<serde_json::Value>(json_str)
+                                        {
+                                            if let Some(prompt) =
+                                                Self::extract_comfyui_prompt(&json)
+                                            {
+                                                return Some(prompt);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        inner += 8 + sub_size;
+                        if sub_size % 2 != 0 {
+                            inner += 1;
+                        }
+                    }
+                }
+                break;
+            }
+            offset += 1;
+        }
+
+        None
+    }
+
     fn extract_comfyui_prompt(json: &serde_json::Value) -> Option<String> {
-        // First, try to find nodes with "prompt" in the title and get their text field
         if let Some(nodes) = json.get("nodes").or_else(|| json.get("prompt")) {
             if let Some(nodes_array) = nodes.as_array() {
                 for node in nodes_array {
-                    if let Some(title) = node.get("title").and_then(|v| v.as_str()) {
-                        let title_lower = title.to_lowercase();
-                        if title_lower.contains("prompt") {
-                            if let Some(text) = node
-                                .get("widgets_values")
-                                .and_then(|v| v.as_array())
-                                .and_then(|arr| arr.first())
-                                .and_then(|v| v.as_str())
-                            {
-                                if !text.is_empty() && text.len() > 5 {
-                                    return Some(text.to_string());
-                                }
-                            }
-                            // Also check "text" field directly
-                            if let Some(text) = node.get("text").and_then(|v| v.as_str()) {
-                                if !text.is_empty() && text.len() > 5 {
-                                    return Some(text.to_string());
+                    let is_prompt_node = node
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|t| t.contains("CLIPTextEncode") || t.contains("Text"))
+                        .unwrap_or(false);
+
+                    if is_prompt_node {
+                        if let Some(widgets) = node.get("widgets_values") {
+                            if let Some(arr) = widgets.as_array() {
+                                for item in arr {
+                                    if let Some(text_str) = item.as_str() {
+                                        if !text_str.is_empty() && text_str.len() > 10 {
+                                            return Some(text_str.to_string());
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -340,12 +413,22 @@ impl ImageMetadata {
             }
         }
 
-        // Try "prompt" field directly at root level
+        if let Some(obj) = json.as_object() {
+            for (_node_id, node_def) in obj {
+                if let Some(inputs) = node_def.get("inputs") {
+                    if let Some(text) = inputs.get("text").and_then(|v| v.as_str()) {
+                        if text.len() > 20 {
+                            return Some(text.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
         if let Some(prompt) = json.get("prompt").and_then(|v| v.as_str()) {
             return Some(prompt.to_string());
         }
 
-        // Try to find any string that looks like a prompt (contains common SD keywords)
         fn find_prompt_in_value(value: &serde_json::Value) -> Option<String> {
             match value {
                 serde_json::Value::String(s) => {
@@ -363,7 +446,6 @@ impl ImageMetadata {
                     None
                 }
                 serde_json::Value::Object(map) => {
-                    // Check common prompt field names
                     for key in &["prompt", "text", "description", "positive"] {
                         if let Some(v) = map.get(*key) {
                             if let Some(s) = find_prompt_in_value(v) {
@@ -371,7 +453,6 @@ impl ImageMetadata {
                             }
                         }
                     }
-                    // Recursively search all values
                     for v in map.values() {
                         if let Some(s) = find_prompt_in_value(v) {
                             return Some(s);
