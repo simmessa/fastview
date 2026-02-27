@@ -1,5 +1,5 @@
 use winit::{
-    event::{WindowEvent, MouseScrollDelta},
+    event::{MouseScrollDelta, WindowEvent},
     keyboard::{Key, NamedKey},
 };
 
@@ -20,6 +20,7 @@ pub enum InputAction {
     PageUp,
     PageDown,
     Exit,
+    ToggleMetadata,
 }
 
 pub struct InputHandler {
@@ -76,25 +77,26 @@ impl InputHandler {
 
     fn handle_keyboard_input(&mut self, event: &winit::event::KeyEvent) -> InputAction {
         match &event.logical_key {
-            Key::Named(key) => {
-                match key {
-                    NamedKey::ArrowRight => return InputAction::SelectRight,
-                    NamedKey::ArrowLeft => return InputAction::SelectLeft,
-                    NamedKey::ArrowUp => return InputAction::SelectUp,
-                    NamedKey::ArrowDown => return InputAction::SelectDown,
-                    NamedKey::MediaTrackNext => return InputAction::NextImage,
-                    NamedKey::MediaTrackPrevious => return InputAction::PrevImage,
-                    NamedKey::Backspace => return InputAction::Back,
-                    NamedKey::Escape => return InputAction::Exit,
-                    NamedKey::Enter => return InputAction::OpenSelected,
-                    NamedKey::PageUp => return InputAction::PageUp,
-                    NamedKey::PageDown => return InputAction::PageDown,
-                    _ => {}
-                }
-            }
+            Key::Named(key) => match key {
+                NamedKey::ArrowRight => return InputAction::SelectRight,
+                NamedKey::ArrowLeft => return InputAction::SelectLeft,
+                NamedKey::ArrowUp => return InputAction::SelectUp,
+                NamedKey::ArrowDown => return InputAction::SelectDown,
+                NamedKey::MediaTrackNext => return InputAction::NextImage,
+                NamedKey::MediaTrackPrevious => return InputAction::PrevImage,
+                NamedKey::Backspace => return InputAction::Back,
+                NamedKey::Escape => return InputAction::Exit,
+                NamedKey::Enter => return InputAction::OpenSelected,
+                NamedKey::PageUp => return InputAction::PageUp,
+                NamedKey::PageDown => return InputAction::PageDown,
+                _ => {}
+            },
             Key::Character(c) => {
                 if c == "1" {
                     return InputAction::ActualSize;
+                }
+                if c == "m" || c == "M" {
+                    return InputAction::ToggleMetadata;
                 }
             }
             _ => {}

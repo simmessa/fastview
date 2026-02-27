@@ -1,7 +1,7 @@
-use sled::{Db};
-use serde::{Serialize, Deserialize};
-use std::path::{Path, PathBuf};
 use image::RgbaImage;
+use serde::{Deserialize, Serialize};
+use sled::Db;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CacheEntry {
@@ -35,10 +35,10 @@ impl CacheManager {
             exe_path.pop();
             exe_path
         };
-        
+
         let db_path = cache_dir.join("fastview_cache");
         std::fs::create_dir_all(&cache_dir).ok();
-        
+
         let db = sled::open(db_path).expect("Failed to open cache database");
         CacheManager { db }
     }
@@ -63,7 +63,10 @@ impl CacheManager {
 
     pub fn get_thumbnail(&self, path: &Path) -> Option<RgbaImage> {
         let entry = self.get(path)?;
-        image::load_from_memory(&entry.thumbnail_data).ok()?.to_rgba8().into()
+        image::load_from_memory(&entry.thumbnail_data)
+            .ok()?
+            .to_rgba8()
+            .into()
     }
 
     pub fn set_thumbnail(&self, path: &Path, img: &RgbaImage) {

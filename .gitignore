@@ -1,3 +1,4 @@
 *.txt
 target
 .license_report.md
+example*

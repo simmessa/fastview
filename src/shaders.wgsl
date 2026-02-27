@@ -34,7 +34,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
     if (params.is_grid_item > 0.5) {
         // Grid Mode: params.pan is [x, y] in pixels, params.zoom is box size in pixels
-        let pixel_pos = params.pan + base_uv * params.zoom;
+        var quad_size = vec2<f32>(params.zoom, params.zoom);
+        if (params._pad2.x > 0.0) {
+            quad_size.y = params._pad2.x;
+        }
+        let pixel_pos = params.pan + base_uv * quad_size;
         
         let clip_x = (pixel_pos.x / params.window_size.x) * 2.0 - 1.0;
         let clip_y = 1.0 - (pixel_pos.y / params.window_size.y) * 2.0;
