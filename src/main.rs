@@ -792,8 +792,8 @@ impl AppState {
             .and_then(|data| FontArc::try_from_vec(data).ok());
 
         if let Some(font) = font {
-            let scale = PxScale::from(14.0);
-            let line_height = 18.0;
+            let scale = PxScale::from(16.0);
+            let line_height = 22.0;
             let padding = 10.0;
 
             let lines = self
@@ -808,7 +808,7 @@ impl AppState {
             let mut overlay_img = RgbaImage::new(overlay_width as u32, overlay_height);
 
             for pixel in overlay_img.pixels_mut() {
-                *pixel = Rgba([0, 0, 0, 128]);
+                *pixel = Rgba([0, 0, 0, 180]);
             }
 
             let vertical_start = padding;
