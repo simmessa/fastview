@@ -75,6 +75,10 @@ struct AppState {
     // Metadata overlay
     show_metadata: bool,
     current_metadata: Option<ImageMetadata>,
+
+    // Help overlay
+    show_help: bool,
+    help_lines: Vec<String>,
 }
 
 impl AppState {
@@ -308,6 +312,8 @@ impl AppState {
             selected_index: 0,
             show_metadata: false,
             current_metadata: None,
+            show_help: false,
+            help_lines: Self::create_help_lines(),
         };
 
         // Sync renderer mode and load grid
@@ -346,6 +352,30 @@ impl AppState {
         self.window.focus_window();
         self.window
             .request_user_attention(Some(UserAttentionType::Critical));
+    }
+
+    fn create_help_lines() -> Vec<String> {
+        vec![
+            "FastView - Key Bindings".to_string(),
+            "".to_string(),
+            "Navigation:".to_string(),
+            "  Arrow Keys / HJKL    - Move selection in grid".to_string(),
+            "  Enter                - Open selected image".to_string(),
+            "  Backspace            - Go back to parent folder".to_string(),
+            "  Page Up / Down       - Scroll grid".to_string(),
+            "".to_string(),
+            "Image Viewing:".to_string(),
+            "  Media Next/Prev      - Next / Previous image".to_string(),
+            "  1                    - Actual size (1:1 zoom)".to_string(),
+            "  Mouse Wheel          - Zoom in single view".to_string(),
+            "".to_string(),
+            "Display:".to_string(),
+            "  M                    - Toggle metadata overlay".to_string(),
+            "  H                    - Toggle help overlay".to_string(),
+            "".to_string(),
+            "Exit:".to_string(),
+            "  Escape               - Close application".to_string(),
+        ]
     }
 
     fn open_image_internal(&mut self, file_path: &Path) {
@@ -688,6 +718,13 @@ impl AppState {
                     self.window.request_redraw();
                 }
             }
+            InputAction::ToggleHelp => {
+                self.show_help = !self.show_help;
+                if !self.show_help {
+                    self.renderer.set_overlay(None, None);
+                }
+                self.window.request_redraw();
+            }
         }
 
         match &event {
@@ -706,6 +743,9 @@ impl AppState {
                 self.save_window_state();
             }
             WindowEvent::RedrawRequested => {
+                if self.show_help {
+                    self.update_help_overlay();
+                }
                 self.renderer.render(
                     self.mode == ViewMode::Grid,
                     if self.mode == ViewMode::Grid {
@@ -783,6 +823,92 @@ impl AppState {
         }
     }
 
+    fn update_help_overlay(&mut self) {
+        let win_size = self.renderer.get_window_size();
+
+        let font = std::fs::read("C:\\Windows\\Fonts\\arial.ttf")
+            .ok()
+            .and_then(|data| FontArc::try_from_vec(data).ok());
+
+        if let Some(font) = font {
+            let scale = PxScale::from(16.0);
+            let line_height = 22.0f32;
+            let box_padding = 40.0;
+
+            let mut rendered_lines: Vec<(String, u32)> = Vec::new();
+            let mut max_width = 0u32;
+
+            for line in &self.help_lines {
+                let text_width = if !line.is_empty() {
+                    (line.len() as f32 * 9.5) as u32
+                } else {
+                    0
+                };
+                max_width = max_width.max(text_width);
+                rendered_lines.push((line.clone(), text_width));
+            }
+
+            let content_width = max_width as f32 + box_padding * 2.0;
+            let content_height = (self.help_lines.len() as f32 * line_height) + box_padding * 2.0;
+
+            let (overlay_width, overlay_height, overlay_x, overlay_y) =
+                if self.mode == ViewMode::Grid {
+                    let fixed_size = 1024.0;
+                    let overlay_x = (win_size[0] - fixed_size) / 2.0;
+                    let overlay_y = (win_size[1] - fixed_size) / 2.0;
+                    (fixed_size as u32, fixed_size as u32, overlay_x, overlay_y)
+                } else {
+                    let overlay_width = content_width.min(win_size[0] * 0.8).max(350.0) as u32;
+                    let overlay_height = content_height.ceil() as u32;
+                    let img_bounds = self.renderer.get_image_screen_bounds().unwrap_or([
+                        0.0,
+                        0.0,
+                        win_size[0],
+                        win_size[1],
+                    ]);
+                    let overlay_x = (win_size[0] - overlay_width as f32) / 2.0;
+                    let overlay_y = img_bounds[3] - overlay_height as f32 - 20.0;
+                    (overlay_width, overlay_height, overlay_x, overlay_y)
+                };
+
+            let mut overlay_img = RgbaImage::new(overlay_width, overlay_height);
+
+            for pixel in overlay_img.pixels_mut() {
+                *pixel = Rgba([20, 20, 20, 230]);
+            }
+
+            let mut y_offset = box_padding;
+
+            for (line, text_width) in rendered_lines {
+                let x_offset = box_padding
+                    + (overlay_width as f32 - text_width as f32 - box_padding * 2.0) / 2.0;
+                let line_height_px = if line.is_empty() { 8.0 } else { line_height };
+
+                draw_text_mut(
+                    &mut overlay_img,
+                    Rgba([240, 240, 240, 255]),
+                    x_offset as i32,
+                    y_offset as i32,
+                    scale,
+                    &font,
+                    &line,
+                );
+
+                y_offset += line_height_px;
+            }
+
+            self.renderer.set_overlay(
+                Some(&overlay_img),
+                Some([
+                    overlay_x,
+                    overlay_y,
+                    overlay_width as f32,
+                    overlay_height as f32,
+                ]),
+            );
+        }
+    }
+
     fn update_metadata_overlay(&mut self) {
         let win_size = self.renderer.get_window_size();
         let img_bounds =
@@ -845,7 +971,12 @@ impl AppState {
 
             self.renderer.set_overlay(
                 Some(&overlay_img),
-                Some([overlay_x, overlay_y, overlay_width, overlay_height as f32]),
+                Some([
+                    overlay_x,
+                    overlay_y,
+                    overlay_width as f32,
+                    overlay_height as f32,
+                ]),
             );
         } else {
             let overlay_height = 40.0;

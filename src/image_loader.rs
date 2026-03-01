@@ -51,7 +51,14 @@ impl ImageLoader {
         self.items.sort_by(|a, b| match (a, b) {
             (FileItem::Directory(_), FileItem::Image(_)) => std::cmp::Ordering::Less,
             (FileItem::Image(_), FileItem::Directory(_)) => std::cmp::Ordering::Greater,
-            (FileItem::Directory(pa), FileItem::Directory(pb)) => pa.cmp(pb),
+            (FileItem::Directory(pa), FileItem::Directory(pb)) => {
+                let meta_a = fs::metadata(pa).ok().and_then(|m| m.modified().ok());
+                let meta_b = fs::metadata(pb).ok().and_then(|m| m.modified().ok());
+                match (meta_a, meta_b) {
+                    (Some(ta), Some(tb)) => tb.cmp(&ta),
+                    _ => pa.cmp(pb),
+                }
+            }
             (FileItem::Image(pa), FileItem::Image(pb)) => {
                 let meta_a = fs::metadata(pa).ok().and_then(|m| m.modified().ok());
                 let meta_b = fs::metadata(pb).ok().and_then(|m| m.modified().ok());

@@ -33,7 +33,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     out.quad_uv = base_uv;
 
     if (params.is_grid_item > 0.5) {
-        // Grid Mode: params.pan is [x, y] in pixels, params.zoom is box size in pixels
+        // Grid Mode or Overlay Mode: params.pan is [x, y] in pixels, params.zoom is box size in pixels
         var quad_size = vec2<f32>(params.zoom, params.zoom);
         if (params._pad2.x > 0.0) {
             quad_size.y = params._pad2.x;
@@ -44,14 +44,19 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
         let clip_y = 1.0 - (pixel_pos.y / params.window_size.y) * 2.0;
         out.clip_position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
         
-        let aspect = params.image_size.x / params.image_size.y;
-        var uv = base_uv;
-        if (aspect > 1.0) {
-            uv.x = (uv.x - 0.5) * (params.image_size.y / params.image_size.x) + 0.5;
-        } else if (aspect < 1.0) {
-            uv.y = (uv.y - 0.5) * (params.image_size.x / params.image_size.y) + 0.5;
+        // For overlays (image_size is 1x1), use full quad UV; for grid items, apply aspect correction
+        if (params.image_size.x > 1.0 || params.image_size.y > 1.0) {
+            let aspect = params.image_size.x / params.image_size.y;
+            var uv = base_uv;
+            if (aspect > 1.0) {
+                uv.x = (uv.x - 0.5) * (params.image_size.y / params.image_size.x) + 0.5;
+            } else if (aspect < 1.0) {
+                uv.y = (uv.y - 0.5) * (params.image_size.x / params.image_size.y) + 0.5;
+            }
+            out.uv = uv;
+        } else {
+            out.uv = base_uv;
         }
-        out.uv = uv; // Quad is already flipped in clip_y calculation
     } else {
         // Single View Mode: ABSOLUTE SCALING (1.0 = 1:1 pixel)
         let base_scale = params.image_size / params.window_size;
@@ -74,6 +79,12 @@ var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Overlay mode: use quad_uv directly without clipping
+    if (params.image_size.x <= 1.0 && params.image_size.y <= 1.0) {
+        var color = textureSample(t_diffuse, s_diffuse, in.quad_uv);
+        return color;
+    }
+
     if (params.is_grid_item > 0.5) {
         if (in.quad_uv.x < 0.0 || in.quad_uv.x > 1.0 || in.quad_uv.y < 0.0 || in.quad_uv.y > 1.0) {
             discard;

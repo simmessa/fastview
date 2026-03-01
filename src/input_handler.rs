@@ -21,6 +21,7 @@ pub enum InputAction {
     PageDown,
     Exit,
     ToggleMetadata,
+    ToggleHelp,
 }
 
 pub struct InputHandler {
@@ -97,6 +98,9 @@ impl InputHandler {
                 }
                 if c == "m" || c == "M" {
                     return InputAction::ToggleMetadata;
+                }
+                if c == "h" || c == "H" {
+                    return InputAction::ToggleHelp;
                 }
             }
             _ => {}

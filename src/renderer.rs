@@ -61,6 +61,7 @@ pub struct Renderer {
     overlay_bind_group: Option<wgpu::BindGroup>,
     overlay_size: Option<[f32; 2]>,
     overlay_rect: Option<[f32; 4]>, // [x, y, w, h]
+    overlay_pipeline: wgpu::RenderPipeline,
 }
 
 impl Renderer {
@@ -95,6 +96,8 @@ impl Renderer {
         }
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders.wgsl"));
+        let overlay_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders_overlay.wgsl"));
 
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -162,6 +165,45 @@ impl Renderer {
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        // Create overlay pipeline for rectangular overlays
+        let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Overlay Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &overlay_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &overlay_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: None,
@@ -254,6 +296,7 @@ impl Renderer {
             surface,
             config,
             render_pipeline,
+            overlay_pipeline,
             diffuse_bind_group,
             texture_bind_group_layout,
             params_bind_group_layout,
@@ -558,54 +601,6 @@ impl Renderer {
                 rp.set_bind_group(1, &self.params_bind_group, &[]);
                 rp.draw(0..3, 0..1);
             }
-
-            // Render overlay if present
-            if let Some(ref overlay_bg) = self.overlay_bind_group {
-                if let Some(rect) = self.overlay_rect {
-                    let overlay_x = rect[0];
-                    let overlay_y = rect[1];
-                    let overlay_width = rect[2];
-                    let overlay_height = rect[3];
-
-                    let overlay_params = Params {
-                        image_size: [1.0, 1.0], // 1:1 map, no aspect correction in shader
-                        window_size: self.params.window_size,
-                        pan: [overlay_x, overlay_y],
-                        zoom: overlay_width,
-                        is_grid_item: 1.0,
-                        is_selected: 0.0,
-                        _pad: 0.0,
-                        _pad2: [overlay_height, 0.0], // Pass height for non-square quad
-                    };
-
-                    self.queue.write_buffer(
-                        &self.overlay_params_buffer,
-                        0,
-                        bytemuck::bytes_of(&overlay_params),
-                    );
-
-                    {
-                        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: None,
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-                        rp.set_pipeline(&self.render_pipeline);
-                        rp.set_bind_group(0, overlay_bg, &[]);
-                        rp.set_bind_group(1, &self.overlay_params_bind_group, &[]);
-                        rp.draw(0..3, 0..1);
-                    }
-                }
-            }
         } else {
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
@@ -662,6 +657,52 @@ impl Renderer {
                 rp.set_bind_group(0, &item.texture_bind_group, &[]);
                 rp.set_bind_group(1, &item.params_bind_group, &[]);
                 rp.draw(0..3, 0..1);
+            }
+        }
+
+        // Render overlay if present (after grid/render pass is closed)
+        if let Some(ref overlay_bg) = self.overlay_bind_group {
+            if let Some(rect) = self.overlay_rect {
+                let overlay_x = rect[0];
+                let overlay_y = rect[1];
+                let overlay_width = rect[2];
+                let overlay_height = rect[3];
+
+                let overlay_params = Params {
+                    image_size: [1.0, 1.0],
+                    window_size: self.params.window_size,
+                    pan: [overlay_x, overlay_y],
+                    zoom: overlay_width,
+                    is_grid_item: 1.0,
+                    is_selected: 0.0,
+                    _pad: 0.0,
+                    _pad2: [overlay_height, 0.0],
+                };
+
+                self.queue.write_buffer(
+                    &self.overlay_params_buffer,
+                    0,
+                    bytemuck::bytes_of(&overlay_params),
+                );
+
+                let mut rp_overlay = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                rp_overlay.set_pipeline(&self.overlay_pipeline);
+                rp_overlay.set_bind_group(0, overlay_bg, &[]);
+                rp_overlay.set_bind_group(1, &self.overlay_params_bind_group, &[]);
+                rp_overlay.draw(0..4, 0..1);
             }
         }
 
