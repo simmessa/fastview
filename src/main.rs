@@ -85,6 +85,11 @@ impl AppState {
     ) -> AppState {
         let window = Arc::new(window);
         let size = window.inner_size();
+        let (width, height) = if size.width == 0 || size.height == 0 {
+            (1280, 720)
+        } else {
+            (size.width, size.height)
+        };
 
         let args: Vec<String> = std::env::args().collect();
         let input_path = if args.len() > 1 {
@@ -135,7 +140,7 @@ impl AppState {
         ))
         .expect("Failed to create device");
 
-        let renderer = Renderer::new(device, queue, adapter, surface, size.width, size.height);
+        let renderer = Renderer::new(device, queue, adapter, surface, width, height);
 
         let input_handler = InputHandler::new();
 
@@ -690,9 +695,11 @@ impl AppState {
                 std::process::exit(0);
             }
             WindowEvent::Resized(new_size) => {
-                self.renderer.resize(new_size.width, new_size.height);
-                self.save_window_state();
-                self.update_viewport();
+                if new_size.width > 0 && new_size.height > 0 {
+                    self.renderer.resize(new_size.width, new_size.height);
+                    self.save_window_state();
+                    self.update_viewport();
+                }
                 self.window.request_redraw();
             }
             WindowEvent::Moved(_) => {

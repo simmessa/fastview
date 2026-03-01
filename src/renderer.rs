@@ -83,14 +83,16 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width,
-            height,
+            width: if width == 0 { 1 } else { width },
+            height: if height == 0 { 1 } else { height },
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &config);
+        if width > 0 && height > 0 {
+            surface.configure(&device, &config);
+        }
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders.wgsl"));
 
