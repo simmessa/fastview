@@ -153,15 +153,20 @@ impl ImageMetadata {
         if let Some(ref prompt) = self.prompt {
             if prompt.trim().starts_with('{') {
                 lines.push("".to_string());
-                lines.push("ComfyUI prompt:".to_string());
+                lines.push("Prompt:".to_string());
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(prompt) {
                     if let Some(extracted) = Self::extract_comfyui_prompt(&json) {
-                        lines.push(format!("\"{}\"", extracted));
+                        let max_chars = 80;
+                        let chars: Vec<char> = extracted.chars().collect();
+                        for chunk in chars.chunks(max_chars) {
+                            let chunk_str: String = chunk.iter().collect();
+                            lines.push(chunk_str);
+                        }
                     } else {
-                        lines.push(format!("\"{}\"", &prompt[..prompt.len().min(200)]));
+                        lines.push("Cannot extract prompt from generated image".to_string());
                     }
                 } else {
-                    lines.push(format!("\"{}\"", &prompt[..prompt.len().min(200)]));
+                    lines.push("Cannot extract prompt from generated image".to_string());
                 }
             } else {
                 lines.push("".to_string());
