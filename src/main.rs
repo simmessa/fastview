@@ -7,6 +7,7 @@ mod metadata;
 mod renderer;
 
 use ab_glyph::{FontArc, PxScale};
+use arboard::Clipboard;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_rect_mut, draw_text_mut};
@@ -79,6 +80,10 @@ struct AppState {
     // Help overlay
     show_help: bool,
     help_lines: Vec<String>,
+
+    // Message overlay
+    message: Option<String>,
+    message_timer: Option<std::time::Instant>,
 }
 
 impl AppState {
@@ -314,6 +319,8 @@ impl AppState {
             current_metadata: None,
             show_help: false,
             help_lines: Self::create_help_lines(),
+            message: None,
+            message_timer: None,
         };
 
         // Sync renderer mode and load grid
@@ -370,6 +377,7 @@ impl AppState {
             "  Media Next/Prev      - Next / Previous image".to_string(),
             "  1                    - Actual size (1:1 zoom)".to_string(),
             "  Mouse Wheel          - Zoom in single view".to_string(),
+            "  C                    - Copy extracted prompt to clipboard".to_string(),
             "".to_string(),
             "Display:".to_string(),
             "  M                    - Toggle metadata overlay".to_string(),
@@ -729,6 +737,38 @@ impl AppState {
                 }
                 self.window.request_redraw();
             }
+            InputAction::CopyPrompt => {
+                if self.mode == ViewMode::Single {
+                    if let Some(ref metadata) = self.current_metadata {
+                        if let Some(ref prompt) = metadata.prompt {
+                            let mut clipboard = Clipboard::new().ok();
+                            if let Some(ref mut cb) = clipboard {
+                                if cb.set_text(prompt).is_ok() {
+                                    self.message =
+                                        Some("Extracted prompt copied to clipboard".to_string());
+                                    self.message_timer = Some(std::time::Instant::now());
+                                } else {
+                                    self.message =
+                                        Some("Cannot detect and copy extracted prompt".to_string());
+                                    self.message_timer = Some(std::time::Instant::now());
+                                }
+                            } else {
+                                self.message =
+                                    Some("Cannot detect and copy extracted prompt".to_string());
+                                self.message_timer = Some(std::time::Instant::now());
+                            }
+                        } else {
+                            self.message =
+                                Some("Cannot detect and copy extracted prompt".to_string());
+                            self.message_timer = Some(std::time::Instant::now());
+                        }
+                    } else {
+                        self.message = Some("Cannot detect and copy extracted prompt".to_string());
+                        self.message_timer = Some(std::time::Instant::now());
+                    }
+                    self.window.request_redraw();
+                }
+            }
         }
 
         match &event {
@@ -747,8 +787,23 @@ impl AppState {
                 self.save_window_state();
             }
             WindowEvent::RedrawRequested => {
+                // Check and update message timer
+                if let Some(timer) = self.message_timer {
+                    if timer.elapsed().as_secs() >= 2 {
+                        self.message = None;
+                        self.message_timer = None;
+                        self.renderer.set_overlay(None, None);
+                    } else {
+                        // Keep requesting redraws while message is visible
+                        self.window.request_redraw();
+                    }
+                }
+
                 if self.show_help {
                     self.update_help_overlay();
+                } else if let Some(ref msg) = self.message {
+                    let msg_clone = msg.clone();
+                    self.update_message_overlay(&msg_clone);
                 }
                 self.renderer.render(
                     self.mode == ViewMode::Grid,
@@ -909,6 +964,47 @@ impl AppState {
                     overlay_width as f32,
                     overlay_height as f32,
                 ]),
+            );
+        }
+    }
+
+    fn update_message_overlay(&mut self, message: &str) {
+        let win_size = self.renderer.get_window_size();
+
+        let font = std::fs::read("C:\\Windows\\Fonts\\arial.ttf")
+            .ok()
+            .and_then(|data| FontArc::try_from_vec(data).ok());
+
+        if let Some(font) = font {
+            let scale = PxScale::from(18.0);
+            let padding = 20.0;
+
+            let text_width = (message.len() as f32 * 10.0) as u32;
+            let overlay_width = text_width as f32 + padding * 2.0;
+            let overlay_height = 50.0f32;
+
+            let overlay_x = (win_size[0] - overlay_width) / 2.0;
+            let overlay_y = 50.0;
+
+            let mut overlay_img = RgbaImage::new(overlay_width as u32, overlay_height as u32);
+
+            for pixel in overlay_img.pixels_mut() {
+                *pixel = Rgba([0, 0, 0, 200]);
+            }
+
+            draw_text_mut(
+                &mut overlay_img,
+                Rgba([255, 255, 255, 255]),
+                padding as i32,
+                (padding - 4.0) as i32,
+                scale,
+                &font,
+                message,
+            );
+
+            self.renderer.set_overlay(
+                Some(&overlay_img),
+                Some([overlay_x, overlay_y, overlay_width, overlay_height]),
             );
         }
     }

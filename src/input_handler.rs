@@ -22,6 +22,7 @@ pub enum InputAction {
     Exit,
     ToggleMetadata,
     ToggleHelp,
+    CopyPrompt,
 }
 
 pub struct InputHandler {
@@ -101,6 +102,9 @@ impl InputHandler {
                 }
                 if c == "h" || c == "H" {
                     return InputAction::ToggleHelp;
+                }
+                if c == "c" || c == "C" {
+                    return InputAction::CopyPrompt;
                 }
             }
             _ => {}
