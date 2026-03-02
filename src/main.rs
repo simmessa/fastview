@@ -342,6 +342,8 @@ impl AppState {
             self.load_grid();
             self.mode = ViewMode::Grid;
             self.renderer.set_view_mode(true);
+            self.show_metadata = false;
+            self.renderer.set_overlay(None, None);
         }
 
         self.update_window_title();
@@ -591,6 +593,8 @@ impl AppState {
                     self.renderer.set_filtering(false, None);
                     self.mode = ViewMode::Grid;
                     self.renderer.set_view_mode(true);
+                    self.show_metadata = false;
+                    self.renderer.set_overlay(None, None);
                 } else {
                     let mut path = self.image_loader.get_path().to_path_buf();
                     if path.pop() {
