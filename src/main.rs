@@ -1023,7 +1023,8 @@ impl ApplicationHandler<UserEvent> for App {
         if self.state.is_none() {
             let mut window_attributes = Window::default_attributes()
                 .with_title("FastView")
-                .with_inner_size(LogicalSize::new(1280, 720));
+                .with_inner_size(LogicalSize::new(1280, 720))
+                .with_visible(false);
 
             // Restore window state
             if let Some(settings) = self.cache.get_window_settings() {
@@ -1038,6 +1039,9 @@ impl ApplicationHandler<UserEvent> for App {
 
             let mut app_state =
                 AppState::new(window, self.event_loop_proxy.clone(), self.cache.clone());
+
+            // Show window immediately after init (but before first render completes)
+            app_state.window.set_visible(true);
 
             // Force immediate render to prevent white flash
             app_state.window.request_redraw();
