@@ -1,7 +1,75 @@
+use img_parts::png::Png;
 use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
+use whatlang::detect;
+
+fn extract_png_text_chunks(buffer: &[u8]) -> Vec<(String, String)> {
+    let mut chunks = Vec::new();
+
+    let owned_buffer = buffer.to_vec();
+    if let Ok(png) = Png::from_bytes(owned_buffer.into()) {
+        for chunk in png.chunks() {
+            let kind = chunk.kind();
+            let kind_str = std::str::from_utf8(&kind).unwrap_or("");
+
+            if kind_str == "tEXt" || kind_str == "iTXt" || kind_str == "zTXt" {
+                let contents = chunk.contents();
+                if let Ok(text) = std::str::from_utf8(contents) {
+                    let parts: Vec<&str> = text.splitn(2, '\0').collect();
+                    if parts.len() == 2 {
+                        let keyword = parts[0].to_string();
+                        let value = parts[1].to_string();
+                        chunks.push((keyword, value));
+                    }
+                }
+            }
+        }
+    }
+
+    chunks
+}
+
+fn is_english(text: &str) -> bool {
+    let text = text.trim();
+    if text.len() < 10 {
+        return false;
+    }
+
+    if let Some(info) = detect(text) {
+        return info.lang() == whatlang::Lang::Eng;
+    }
+    false
+}
+
+fn is_json_fragment(text: &str) -> bool {
+    let text = text.trim();
+
+    let brace_count = text.chars().filter(|&c| c == '{' || c == '}').count();
+    let bracket_count = text.chars().filter(|&c| c == '[' || c == ']').count();
+    let colon_count = text.chars().filter(|&c| c == ':').count();
+
+    if brace_count > 3 || bracket_count > 3 {
+        return true;
+    }
+
+    if colon_count > 2 && text.contains("\"") && text.contains(":") {
+        if text.starts_with('{') || text.starts_with('[') {
+            return true;
+        }
+        if text.contains("\"name\":") || text.contains("\"type\":") || text.contains("\"id\":") {
+            return true;
+        }
+    }
+
+    if text.contains("\"\"") || text.starts_with("\"") != text.ends_with("\"") {
+        return true;
+    }
+
+    false
+}
 
 fn is_likely_prompt(text: &str) -> f32 {
     let text = text.trim();
@@ -11,7 +79,6 @@ fn is_likely_prompt(text: &str) -> f32 {
 
     let text_lower = text.to_lowercase();
 
-    // Skip common EXIF technical strings
     let skip_patterns = [
         "row 0 at top",
         "column 0 at left",
@@ -153,7 +220,6 @@ fn is_likely_prompt(text: &str) -> f32 {
         "output_ext",
         "quality",
         "images",
-        "mode",
         "latent_type",
         "width",
         "height",
@@ -208,9 +274,6 @@ fn is_likely_prompt(text: &str) -> f32 {
         "autoFitOnChange",
         "autoResizeOnChange",
         "autoDetect",
-        "action_slider_snap_min",
-        "action_slider_snap_max",
-        "action_slider_snap_step",
     ];
     for pattern in &skip_patterns {
         if text_lower.contains(pattern) {
@@ -218,24 +281,20 @@ fn is_likely_prompt(text: &str) -> f32 {
         }
     }
 
-    // Skip if mostly numbers
     let numeric_ratio: f32 =
         text.chars().filter(|c| c.is_ascii_digit()).count() as f32 / text.len() as f32;
     if numeric_ratio > 0.5 {
         return 0.0;
     }
 
-    // Skip if contains hex prefixes
     if text_lower.contains("0x") && text.len() > 20 {
         return 0.0;
     }
 
-    // Skip if looks like a file path
     if text.contains('\\') || (text.contains('/') && text.contains('.')) {
         return 0.0;
     }
 
-    // Count words
     let words: Vec<&str> = text
         .split(|c: char| c.is_whitespace() || c == ',' || c == '"')
         .filter(|w: &&str| w.len() > 2)
@@ -244,7 +303,6 @@ fn is_likely_prompt(text: &str) -> f32 {
         return 0.0;
     }
 
-    // Common prompt indicators
     let prompt_indicators = [
         "of",
         "a",
@@ -303,7 +361,6 @@ fn is_likely_prompt(text: &str) -> f32 {
         "hyperrealistic",
         "natural",
         "lighting",
-        "color",
         "colors",
         "warm",
         "cool",
@@ -344,7 +401,6 @@ fn is_likely_prompt(text: &str) -> f32 {
         "fiction",
         "cyberpunk",
         "steampunk",
-        "fantasy",
         "magic",
         "mystical",
         "ethereal",
@@ -374,7 +430,6 @@ fn is_likely_prompt(text: &str) -> f32 {
         "glow",
         "shine",
         "reflection",
-        "cyberpunk",
         "futuristic",
         "retro",
         "vintage",
@@ -385,159 +440,6 @@ fn is_likely_prompt(text: &str) -> f32 {
         "surreal",
         "dreamlike",
         "otherworldly",
-        "dragon",
-        "unicorn",
-        "phoenix",
-        "knight",
-        "princess",
-        "warrior",
-        "forest",
-        "mountain",
-        "ocean",
-        "river",
-        "lake",
-        "desert",
-        "city",
-        "street",
-        "building",
-        "house",
-        "castle",
-        "temple",
-        "church",
-        "sword",
-        "shield",
-        "armor",
-        "magic",
-        "spell",
-        "potion",
-        "robot",
-        "alien",
-        "spaceship",
-        "planet",
-        "galaxy",
-        "star",
-        "animal",
-        "cat",
-        "dog",
-        "bird",
-        "horse",
-        "wolf",
-        "lion",
-        "tattoo",
-        "makeup",
-        "jewelry",
-        "accessory",
-        "fashion",
-        "style",
-        "uniform",
-        "military",
-        "shoes",
-        "heels",
-        "socks",
-        "corridor",
-        "salute",
-        "standing",
-        "caucasian",
-        "redhead",
-        "blonde",
-        "american",
-        "african",
-        "arabian",
-        "curly",
-        "skirt",
-        "skirts",
-        "trouser",
-        "jeans",
-        "jacket",
-        "coat",
-        "suit",
-        "gown",
-        "vest",
-        "blouse",
-        "pant",
-        "shorts",
-        "sweater",
-        "tshirt",
-        "hoodie",
-        "cap",
-        "hat",
-        "scarf",
-        "glove",
-        "belt",
-        "bag",
-        "purse",
-        "wallet",
-        "watch",
-        "glasses",
-        "sunglasses",
-        "necklace",
-        "earring",
-        "bracelet",
-        "ring",
-        "anklet",
-        "chain",
-        "pin",
-        "button",
-        "buttonhole",
-        "zipper",
-        "pocket",
-        "collar",
-        "cuff",
-        "hem",
-        "seam",
-        "stitch",
-        "thread",
-        "fabric",
-        "material",
-        "texture",
-        "pattern",
-        "print",
-        "stripe",
-        "check",
-        "plaid",
-        "floral",
-        "polka",
-        "dot",
-        "geometric",
-        "abstract",
-        "solid",
-        "gradient",
-        "ombre",
-        "tie-dye",
-        "embroidered",
-        "printed",
-        "woven",
-        "knitted",
-        "crocheted",
-        "sewn",
-        "stitched",
-        "quilted",
-        "padded",
-        "lined",
-        "fleece",
-        "velvet",
-        "silk",
-        "cotton",
-        "linen",
-        "wool",
-        "leather",
-        "suede",
-        "denim",
-        "canvas",
-        "nylon",
-        "polyester",
-        "rayon",
-        "spandex",
-        "acrylic",
-        "merino",
-        "alpaca",
-        "cashmere",
-        "mohair",
-        "angora",
-        "bamboo",
-        "modal",
-        "tencel",
-        "lyocell",
     ];
 
     let mut indicator_count = 0;
@@ -547,38 +449,153 @@ fn is_likely_prompt(text: &str) -> f32 {
         }
     }
 
-    // Score based on indicator count and length
     let length_score = if text.len() > 50 { 1.0 } else { 0.5 };
     (indicator_count as f32 * 0.3 + length_score).min(10.0)
 }
 
-fn extract_prompts_from_json(root: &JsonValue) -> Vec<(String, f32)> {
-    let mut prompts = Vec::new();
-    extract_prompts_recursive(root, &mut prompts);
-    prompts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    prompts
+fn is_technical_string(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return true;
+    }
+
+    let text_lower = text.to_lowercase();
+
+    if text.len() < 3 {
+        return true;
+    }
+
+    if text
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+    {
+        return true;
+    }
+
+    if text.starts_with("0x") && text.len() > 4 {
+        return true;
+    }
+
+    if is_json_fragment(text) {
+        return true;
+    }
+
+    if text.contains('\\')
+        && (text.contains(".safetensors")
+            || text.contains(".ckpt")
+            || text.contains(".pt")
+            || text.contains(".pth"))
+    {
+        return true;
+    }
+
+    let technical_keywords = [
+        "workflow",
+        "last_node_id",
+        "last_link_id",
+        "class_type",
+        "sampler_name",
+        "scheduler",
+        "noise_seed",
+        "cfg",
+        "steps",
+        "width",
+        "height",
+        "vae_name",
+        "unet_name",
+        "model_name",
+        "clip_name",
+        "positive",
+        "negative",
+        "widgets",
+        "values",
+        "pos",
+        "size",
+        "flags",
+        "mode",
+        "order",
+        "nodes",
+        "links",
+        "groups",
+        "properties",
+        "inputs",
+        "outputs",
+        "version",
+        "config",
+        "directory",
+        "filename",
+        "foldername",
+        "extension",
+    ];
+
+    for kw in &technical_keywords {
+        if text_lower == *kw || text_lower.starts_with(kw) {
+            return true;
+        }
+    }
+
+    false
 }
 
-fn extract_prompts_recursive(value: &JsonValue, prompts: &mut Vec<(String, f32)>) {
+fn extract_strings_from_json(value: &JsonValue) -> Vec<String> {
+    let mut strings = Vec::new();
+    extract_strings_recursive(value, &mut strings);
+    strings
+}
+
+fn extract_strings_recursive(value: &JsonValue, strings: &mut Vec<String>) {
     match value {
         JsonValue::Object(map) => {
-            for (key, val) in map {
-                if key == "text" {
-                    if let JsonValue::String(text) = val {
-                        prompts.push((text.clone(), 10.0)); // Always add text fields
-                    }
-                } else {
-                    extract_prompts_recursive(val, prompts);
-                }
+            for (_key, val) in map {
+                extract_strings_recursive(val, strings);
             }
         }
         JsonValue::Array(arr) => {
             for item in arr {
-                extract_prompts_recursive(item, prompts);
+                extract_strings_recursive(item, strings);
+            }
+        }
+        JsonValue::String(s) => {
+            if s.len() > 5 && !s.chars().all(|c| c.is_whitespace()) {
+                strings.push(s.clone());
             }
         }
         _ => {}
     }
+}
+
+fn find_prompts_in_strings(strings: Vec<String>) -> Vec<(String, f32)> {
+    let mut prompts: Vec<(String, f32)> = Vec::new();
+    let mut seen = HashSet::new();
+
+    for s in strings {
+        let trimmed = s.trim();
+        if trimmed.is_empty() || seen.contains(trimmed) {
+            continue;
+        }
+        seen.insert(trimmed.to_string());
+
+        if is_technical_string(trimmed) {
+            continue;
+        }
+
+        let word_count = trimmed.split_whitespace().count();
+        if word_count < 3 {
+            continue;
+        }
+
+        let score = is_likely_prompt(trimmed);
+
+        if is_english(trimmed) || score > 2.0 {
+            prompts.push((
+                trimmed.to_string(),
+                score + if is_english(trimmed) { 5.0 } else { 0.0 },
+            ));
+        }
+    }
+
+    prompts.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    prompts
 }
 
 fn extract_metadata(path: &Path) -> Vec<String> {
@@ -607,19 +624,72 @@ fn extract_metadata(path: &Path) -> Vec<String> {
                         if is_text_field {
                             metadata.push(format!("  {:?}: {}", field.tag, value_str));
 
-                            // Try to parse as JSON and extract prompts
+                            let json_candidates: Vec<String> = if let Ok(json_value) =
+                                serde_json::from_str::<JsonValue>(&value_str)
+                            {
+                                extract_strings_from_json(&json_value)
+                            } else {
+                                let mut candidates = Vec::new();
+                                let mut in_string = false;
+                                let mut current = String::new();
+                                let mut escaped = false;
+
+                                for c in value_str.chars() {
+                                    if escaped {
+                                        escaped = false;
+                                        current.push(c);
+                                        continue;
+                                    }
+                                    if c == '\\' {
+                                        escaped = true;
+                                        current.push(c);
+                                        continue;
+                                    }
+                                    if c == '"' {
+                                        in_string = !in_string;
+                                        if !in_string && !current.is_empty() {
+                                            candidates.push(current.clone());
+                                            current.clear();
+                                        }
+                                        continue;
+                                    }
+                                    if in_string {
+                                        current.push(c);
+                                    }
+                                }
+
+                                let mut new_strings: Vec<String> = Vec::new();
+                                for c in &candidates {
+                                    if let Ok(json) =
+                                        serde_json::from_str::<JsonValue>(&format!("\"{}\"", c))
+                                    {
+                                        if let JsonValue::String(s) = json {
+                                            new_strings.push(s);
+                                        }
+                                    }
+                                }
+                                candidates.extend(new_strings);
+                                candidates
+                            };
+
+                            let prompts = find_prompts_in_strings(json_candidates);
+                            for (prompt, _score) in prompts {
+                                if !detected_prompts.contains(&prompt) {
+                                    detected_prompts.push(prompt);
+                                }
+                            }
+
                             if let Ok(json_value) = serde_json::from_str::<JsonValue>(&value_str) {
                                 if let JsonValue::Object(_) = json_value {
-                                    let prompts = extract_prompts_from_json(&json_value);
+                                    let strings = extract_strings_from_json(&json_value);
+                                    let prompts = find_prompts_in_strings(strings);
                                     for (prompt, _score) in prompts {
                                         if !detected_prompts.contains(&prompt) {
                                             detected_prompts.push(prompt);
                                         }
                                     }
                                 } else if let JsonValue::String(s) = json_value {
-                                    // Try to find inner JSON by looking for the first {
                                     if let Some(start) = s.find('{') {
-                                        // Find matching } by counting braces
                                         let rest = &s[start..];
                                         let mut brace_count = 0;
                                         let mut in_string = false;
@@ -656,8 +726,9 @@ fn extract_metadata(path: &Path) -> Vec<String> {
                                             if let Ok(inner_json) =
                                                 serde_json::from_str::<JsonValue>(&rest[..end + 1])
                                             {
-                                                let prompts =
-                                                    extract_prompts_from_json(&inner_json);
+                                                let strings =
+                                                    extract_strings_from_json(&inner_json);
+                                                let prompts = find_prompts_in_strings(strings);
                                                 for (prompt, _score) in prompts {
                                                     if !detected_prompts.contains(&prompt) {
                                                         detected_prompts.push(prompt);
@@ -675,6 +746,37 @@ fn extract_metadata(path: &Path) -> Vec<String> {
                 }
                 Err(e) => {
                     metadata.push(format!("EXIF parsing error: {:?}", e));
+                }
+            }
+
+            let path_str = path.to_string_lossy().to_lowercase();
+            if path_str.ends_with(".png") {
+                metadata.push(String::new());
+                metadata.push("PNG text chunks:".to_string());
+
+                let png_chunks = extract_png_text_chunks(&buffer);
+                for (keyword, text) in &png_chunks {
+                    metadata.push(format!("  {}: {}", keyword, text));
+
+                    let mut all_strings: Vec<String> = Vec::new();
+
+                    if let Ok(json_value) = serde_json::from_str::<JsonValue>(text) {
+                        let strings = extract_strings_from_json(&json_value);
+                        all_strings.extend(strings);
+                    } else {
+                        all_strings.push(text.clone());
+                    }
+
+                    let prompts = find_prompts_in_strings(all_strings);
+                    for (prompt, _score) in prompts {
+                        if !detected_prompts.contains(&prompt) {
+                            detected_prompts.push(prompt);
+                        }
+                    }
+                }
+
+                if png_chunks.is_empty() {
+                    metadata.push("  (no text chunks found)".to_string());
                 }
             }
         } else {

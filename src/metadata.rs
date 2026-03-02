@@ -1,7 +1,10 @@
 use image::DynamicImage;
+use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
+use whatlang::detect;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExifOrientation {
@@ -109,6 +112,190 @@ impl ExifData {
     }
 }
 
+fn is_english(text: &str) -> bool {
+    let text = text.trim();
+    if text.len() < 10 {
+        return false;
+    }
+    if let Some(info) = detect(text) {
+        return info.lang() == whatlang::Lang::Eng;
+    }
+    false
+}
+
+fn is_json_fragment(text: &str) -> bool {
+    let text = text.trim();
+
+    let brace_count = text.chars().filter(|&c| c == '{' || c == '}').count();
+    let bracket_count = text.chars().filter(|&c| c == '[' || c == ']').count();
+    let colon_count = text.chars().filter(|&c| c == ':').count();
+
+    if brace_count > 3 || bracket_count > 3 {
+        return true;
+    }
+
+    if colon_count > 2 && text.contains("\"") && text.contains(":") {
+        if text.starts_with('{') || text.starts_with('[') {
+            return true;
+        }
+        if text.contains("\"name\":") || text.contains("\"type\":") || text.contains("\"id\":") {
+            return true;
+        }
+    }
+
+    if text.contains("\"\"") || text.starts_with("\"") != text.ends_with("\"") {
+        return true;
+    }
+
+    false
+}
+
+fn is_technical_string(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return true;
+    }
+    let text_lower = text.to_lowercase();
+    if text.len() < 3 {
+        return true;
+    }
+    if text
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+    {
+        return true;
+    }
+    if is_json_fragment(text) {
+        return true;
+    }
+    let technical_keywords = [
+        "workflow",
+        "last_node_id",
+        "last_link_id",
+        "class_type",
+        "sampler_name",
+        "scheduler",
+        "noise_seed",
+        "cfg",
+        "steps",
+        "width",
+        "height",
+        "vae_name",
+        "unet_name",
+        "model_name",
+        "clip_name",
+        "positive",
+        "negative",
+        "widgets",
+        "values",
+        "nodes",
+        "links",
+        "pos",
+        "size",
+        "flags",
+        "mode",
+        "order",
+        "properties",
+        "inputs",
+        "outputs",
+        "version",
+        "config",
+    ];
+    for kw in &technical_keywords {
+        if text_lower == *kw {
+            return true;
+        }
+    }
+    false
+}
+
+fn extract_strings_from_json(value: &JsonValue) -> Vec<String> {
+    let mut strings = Vec::new();
+    extract_strings_recursive(value, &mut strings);
+    strings
+}
+
+fn extract_strings_recursive(value: &JsonValue, strings: &mut Vec<String>) {
+    match value {
+        JsonValue::Object(map) => {
+            for (_key, val) in map {
+                extract_strings_recursive(val, strings);
+            }
+        }
+        JsonValue::Array(arr) => {
+            for item in arr {
+                extract_strings_recursive(item, strings);
+            }
+        }
+        JsonValue::String(s) => {
+            if s.len() > 5 && !s.chars().all(|c| c.is_whitespace()) {
+                strings.push(s.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn find_prompts_in_strings(strings: Vec<String>) -> Vec<String> {
+    let mut prompts: Vec<(String, i32)> = Vec::new();
+    let mut seen = HashSet::new();
+
+    for s in strings {
+        let trimmed = s.trim();
+        if trimmed.is_empty() || seen.contains(trimmed) {
+            continue;
+        }
+        seen.insert(trimmed.to_string());
+
+        if is_technical_string(trimmed) {
+            continue;
+        }
+
+        let word_count = trimmed.split_whitespace().count();
+        if word_count < 3 {
+            continue;
+        }
+
+        let mut score = 0;
+
+        if is_english(trimmed) {
+            score += 100;
+        }
+
+        score += word_count as i32;
+
+        if trimmed.len() > 50 {
+            score += 20;
+        }
+        if trimmed.len() > 100 {
+            score += 20;
+        }
+
+        let has_punctuation =
+            trimmed.contains('.') || trimmed.contains(',') || trimmed.contains('!');
+        if has_punctuation {
+            score += 10;
+        }
+
+        let natural_words = [
+            "the", "a", "an", "in", "on", "at", "with", "and", "or", "but", "is", "are", "was",
+            "were", "be", "to", "of", "for", "from", "by",
+        ];
+        let text_lower = trimmed.to_lowercase();
+        for word in &natural_words {
+            if text_lower.contains(word) {
+                score += 2;
+            }
+        }
+
+        prompts.push((trimmed.to_string(), score));
+    }
+
+    prompts.sort_by(|a, b| b.1.cmp(&a.1));
+
+    prompts.into_iter().map(|(s, _)| s).collect()
+}
+
 pub struct ImageMetadata {
     pub orientation: ExifOrientation,
     pub prompt: Option<String>,
@@ -123,8 +310,7 @@ impl ImageMetadata {
             .unwrap_or_default();
 
         let (exif, prompt) = match extension.as_str() {
-            "jpg" | "jpeg" => (Self::read_exif_data(path), None),
-            "png" => (None, Self::read_png_prompt(path)),
+            "jpg" | "jpeg" | "png" => (Self::read_exif_data(path), Self::read_png_prompt(path)),
             "webp" => (None, Self::read_webp_prompt(path)),
             _ => (None, None),
         };
@@ -151,32 +337,13 @@ impl ImageMetadata {
         }
 
         if let Some(ref prompt) = self.prompt {
-            if prompt.trim().starts_with('{') {
-                lines.push("".to_string());
-                lines.push("Prompt:".to_string());
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(prompt) {
-                    if let Some(extracted) = Self::extract_comfyui_prompt(&json) {
-                        let max_chars = 80;
-                        let chars: Vec<char> = extracted.chars().collect();
-                        for chunk in chars.chunks(max_chars) {
-                            let chunk_str: String = chunk.iter().collect();
-                            lines.push(chunk_str);
-                        }
-                    } else {
-                        lines.push("Cannot extract prompt from generated image".to_string());
-                    }
-                } else {
-                    lines.push("Cannot extract prompt from generated image".to_string());
-                }
-            } else {
-                lines.push("".to_string());
-                lines.push("Prompt:".to_string());
-                let max_chars = 80;
-                let chars: Vec<char> = prompt.chars().collect();
-                for chunk in chars.chunks(max_chars) {
-                    let chunk_str: String = chunk.iter().collect();
-                    lines.push(chunk_str);
-                }
+            lines.push("".to_string());
+            lines.push("Prompt:".to_string());
+            let max_chars = 80;
+            let chars: Vec<char> = prompt.chars().collect();
+            for chunk in chars.chunks(max_chars) {
+                let chunk_str: String = chunk.iter().collect();
+                lines.push(chunk_str);
             }
         }
 
@@ -249,53 +416,60 @@ impl ImageMetadata {
             return None;
         }
 
-        let png = match img_parts::png::Png::from_bytes(bytes.into()) {
+        // First try reading EXIF data from PNG
+        let mut cursor = std::io::Cursor::new(&bytes);
+        if let Ok(exif) = exif::Reader::new().read_from_container(&mut cursor) {
+            for field in exif.fields() {
+                let value_str = field.display_value().to_string();
+
+                let is_text_field = !value_str.contains("0x")
+                    && value_str.len() > 3
+                    && value_str.chars().any(|c| c.is_ascii_alphabetic());
+
+                if is_text_field {
+                    let mut all_strings: Vec<String> = Vec::new();
+
+                    if let Ok(json_value) = serde_json::from_str::<JsonValue>(&value_str) {
+                        let strings = extract_strings_from_json(&json_value);
+                        all_strings.extend(strings);
+                    } else {
+                        all_strings.push(value_str.clone());
+                    }
+
+                    let prompts = find_prompts_in_strings(all_strings);
+                    if let Some(prompt) = prompts.into_iter().next() {
+                        return Some(prompt);
+                    }
+                }
+            }
+        }
+
+        // Then try PNG text chunks
+        let owned_bytes = bytes.to_vec();
+        let png = match img_parts::png::Png::from_bytes(owned_bytes.into()) {
             Ok(p) => p,
             Err(_) => return None,
         };
 
         for chunk in png.chunks() {
             let kind = chunk.kind();
-            if kind == *b"tEXt" || kind == *b"iTXt" {
-                if let Ok(text) = std::str::from_utf8(chunk.contents()) {
-                    if text.starts_with("Prompt\0") || text.starts_with("prompt\0") {
-                        return Some(text[7..].to_string());
-                    }
-                }
-            }
-        }
-
-        for chunk in png.chunks() {
-            let kind = chunk.kind();
-            if kind == *b"tEXt" || kind == *b"iTXt" {
+            if kind == *b"tEXt" || kind == *b"iTXt" || kind == *b"zTXt" {
                 if let Ok(text) = std::str::from_utf8(chunk.contents()) {
                     if let Some(pos) = text.find('\0') {
                         let value = &text[pos + 1..];
-                        if value.trim().starts_with('{') {
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(value) {
-                                if let Some(prompt) = Self::extract_comfyui_prompt(&json) {
-                                    return Some(prompt);
-                                }
-                            }
+
+                        let mut all_strings: Vec<String> = Vec::new();
+
+                        if let Ok(json_value) = serde_json::from_str::<JsonValue>(value) {
+                            let strings = extract_strings_from_json(&json_value);
+                            all_strings.extend(strings);
+                        } else {
+                            all_strings.push(value.to_string());
                         }
-                    }
-                }
-            }
-        }
 
-        for chunk in png.chunks() {
-            let kind = chunk.kind();
-            if kind == *b"tEXt" {
-                if let Ok(text) = std::str::from_utf8(chunk.contents()) {
-                    if let Some(pos) = text.find('\0') {
-                        let value = &text[pos + 1..];
-                        if value.len() > 10 && value.len() < 2000 {
-                            let is_likely_prompt = value
-                                .chars()
-                                .any(|c| c == ',' || c == '(' || c == '{' || c == '[');
-                            if is_likely_prompt && !value.contains("AI Generated") {
-                                return Some(value.to_string());
-                            }
+                        let prompts = find_prompts_in_strings(all_strings);
+                        if let Some(prompt) = prompts.into_iter().next() {
+                            return Some(prompt);
                         }
                     }
                 }
@@ -363,14 +537,18 @@ impl ImageMetadata {
                                     let json_str = unescaped.trim_start_matches("Workflow:").trim();
 
                                     if json_str.starts_with('{') {
-                                        if let Ok(json) =
-                                            serde_json::from_str::<serde_json::Value>(json_str)
+                                        if let Ok(json_value) =
+                                            serde_json::from_str::<JsonValue>(json_str)
                                         {
-                                            if let Some(prompt) =
-                                                Self::extract_comfyui_prompt(&json)
-                                            {
+                                            let strings = extract_strings_from_json(&json_value);
+                                            let prompts = find_prompts_in_strings(strings);
+                                            if let Some(prompt) = prompts.into_iter().next() {
                                                 return Some(prompt);
                                             }
+                                        }
+                                    } else {
+                                        if is_english(json_str) && json_str.len() > 20 {
+                                            return Some(json_str.to_string());
                                         }
                                     }
                                 }
@@ -389,95 +567,6 @@ impl ImageMetadata {
         }
 
         None
-    }
-
-    fn extract_comfyui_prompt(json: &serde_json::Value) -> Option<String> {
-        if let Some(nodes) = json.get("nodes").or_else(|| json.get("prompt")) {
-            if let Some(nodes_array) = nodes.as_array() {
-                for node in nodes_array {
-                    let is_prompt_node = node
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .map(|t| t.contains("CLIPTextEncode") || t.contains("Text"))
-                        .unwrap_or(false);
-
-                    if is_prompt_node {
-                        if let Some(widgets) = node.get("widgets_values") {
-                            if let Some(arr) = widgets.as_array() {
-                                for item in arr {
-                                    if let Some(text_str) = item.as_str() {
-                                        if !text_str.is_empty() && text_str.len() > 10 {
-                                            return Some(text_str.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(obj) = json.as_object() {
-            for (_node_id, node_def) in obj {
-                if let Some(inputs) = node_def.get("inputs") {
-                    if let Some(text) = inputs.get("text").and_then(|v| v.as_str()) {
-                        if text.len() > 20 {
-                            return Some(text.to_string());
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some(prompt) = json.get("prompt").and_then(|v| v.as_str()) {
-            return Some(prompt.to_string());
-        }
-
-        fn find_prompt_in_value(value: &serde_json::Value) -> Option<String> {
-            match value {
-                serde_json::Value::String(s) => {
-                    let lower = s.to_lowercase();
-                    if (lower.contains("masterpiece")
-                        || lower.contains("best quality")
-                        || lower.contains("8k")
-                        || lower.contains("ultra detailed")
-                        || lower.contains("photorealistic")
-                        || lower.contains("render"))
-                        && s.len() > 20
-                    {
-                        return Some(s.clone());
-                    }
-                    None
-                }
-                serde_json::Value::Object(map) => {
-                    for key in &["prompt", "text", "description", "positive"] {
-                        if let Some(v) = map.get(*key) {
-                            if let Some(s) = find_prompt_in_value(v) {
-                                return Some(s);
-                            }
-                        }
-                    }
-                    for v in map.values() {
-                        if let Some(s) = find_prompt_in_value(v) {
-                            return Some(s);
-                        }
-                    }
-                    None
-                }
-                serde_json::Value::Array(arr) => {
-                    for v in arr {
-                        if let Some(s) = find_prompt_in_value(v) {
-                            return Some(s);
-                        }
-                    }
-                    None
-                }
-                _ => None,
-            }
-        }
-
-        find_prompt_in_value(json)
     }
 }
 
