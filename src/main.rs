@@ -1035,11 +1035,14 @@ impl ApplicationHandler<UserEvent> for App {
             let window = event_loop
                 .create_window(window_attributes)
                 .expect("Failed to create window");
-            self.state = Some(AppState::new(
-                window,
-                self.event_loop_proxy.clone(),
-                self.cache.clone(),
-            ));
+
+            let mut app_state =
+                AppState::new(window, self.event_loop_proxy.clone(), self.cache.clone());
+
+            // Force immediate render to prevent white flash
+            app_state.window.request_redraw();
+
+            self.state = Some(app_state);
         }
     }
 

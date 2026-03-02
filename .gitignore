@@ -2,3 +2,5 @@
 target
 .license_report.md
 example*
+_*
+*.json

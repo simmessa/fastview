@@ -87,7 +87,7 @@ impl Renderer {
             width: if width == 0 { 1 } else { width },
             height: if height == 0 { 1 } else { height },
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: surface_caps.alpha_modes[0],
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
