@@ -28,6 +28,20 @@ FastView was created entirely by AI agents. The author simply asked the agents n
 - Extracts prompts stored in EXIF data and PNG text chunks
 - Natural language filtering to separate prompts from technical JSON
 
+### Screenshots!
+
+#### Grid view
+<img src="assets/screenshot_1_grid.jpg" alt="Grid view" style="width:50%; height:auto;">
+
+#### Image view
+<img src="assets/screenshot_2_image.jpg" alt="Image view" style="width:50%; height:auto;">
+
+#### Auto detect prompt (most of the time)
+<img src="assets/screenshot_3_prompt_copy.jpg" alt="Prompt detection" style="width:50%; height:auto;">
+
+#### Copy prompt to clipboard (if detected)
+<img src="assets/screenshot_3_prompt_extraction.jpg" alt="Copy prompt to clipboard" style="width:50%; height:auto;">
+
 ### Keyboard Shortcuts
 
 #### Navigation
