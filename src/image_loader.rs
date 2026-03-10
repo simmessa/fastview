@@ -1,5 +1,6 @@
 use crate::metadata::{apply_orientation, ImageMetadata};
 use image::{DynamicImage, RgbaImage};
+use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,15 +36,33 @@ impl ImageLoader {
         self.items.clear();
         self.image_files.clear();
 
-        if let Ok(entries) = fs::read_dir(&self.folder_path) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
+        let entries: Vec<_> = if let Ok(dir) = fs::read_dir(&self.folder_path) {
+            dir.filter_map(|e| e.ok()).map(|e| e.path()).collect()
+        } else {
+            Vec::new()
+        };
 
+        // Process entries in parallel
+        let processed: Vec<_> = entries
+            .par_iter()
+            .map(|path| {
                 if path.is_dir() {
-                    self.items.push(FileItem::Directory(path));
-                } else if is_image_file(&path) {
-                    self.items.push(FileItem::Image(path.clone()));
-                    self.image_files.push(path);
+                    (true, FileItem::Directory(path.clone()))
+                } else if is_image_file(path) {
+                    (false, FileItem::Image(path.clone()))
+                } else {
+                    (false, FileItem::Directory(path.clone()))
+                }
+            })
+            .collect();
+
+        for (is_dir, item) in processed {
+            if is_dir {
+                self.items.push(item);
+            } else {
+                if let FileItem::Image(p) = item {
+                    self.items.push(FileItem::Image(p.clone()));
+                    self.image_files.push(p);
                 }
             }
         }
