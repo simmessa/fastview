@@ -628,6 +628,7 @@ impl AppState {
                     if let Some(img) = self.image_loader.load_current_image() {
                         self.renderer.set_filtering(self.is_actual_size, Some(&img));
                     }
+                    self.update_window_title();
                     self.window.request_redraw();
                 }
             }
