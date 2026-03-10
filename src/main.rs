@@ -1096,15 +1096,36 @@ impl AppState {
             title.push_str(self.image_loader.get_path().to_string_lossy().as_ref());
         } else {
             if let Some(path) = self.image_loader.get_current_path() {
-                let filename = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Unknown".to_string());
+                let img_size = self.renderer.get_image_size();
+                let width = img_size[0] as u32;
+                let height = img_size[1] as u32;
+                let resolution = format!("{}x{}", width, height);
+
+                let zoom = self.renderer.get_zoom();
+                let zoom_str = if zoom == 1.0 {
+                    "1:1".to_string()
+                } else {
+                    format!("{:.0}%", (zoom * 100.0).round())
+                };
+
+                let metadata_indicator =
+                    if let Some(metadata) = self.image_loader.get_current_metadata() {
+                        !metadata.prompt.is_none() || metadata.exif.is_some()
+                    } else {
+                        false
+                    };
+
+                if metadata_indicator {
+                    title.push_str(" - (metadata detected)");
+                }
+
                 title.push_str(&format!(
-                    " - {} [{}/{}]",
-                    filename,
+                    " - {} [{}/{}] [{}zoom:{}]",
+                    path.to_string_lossy(),
                     self.image_loader.get_current_index() + 1,
-                    self.image_loader.get_image_count()
+                    self.image_loader.get_image_count(),
+                    resolution,
+                    zoom_str
                 ));
             }
         }
