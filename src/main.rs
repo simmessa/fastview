@@ -171,12 +171,17 @@ impl AppState {
             None
         };
 
+        // Pre-load font to avoid blocking thumbnail generation
+        let font = std::fs::read("C:\\Windows\\Fonts\\arial.ttf")
+            .ok()
+            .and_then(|data| FontArc::try_from_vec(data).ok());
+
         // Spawn background thread for image loading
         let cache_for_thread = cache.clone_db_handle();
         thread::spawn(move || {
             let mut pending_requests: Vec<LoaderRequest> = Vec::new();
             let mut visible_indices: Vec<usize> = Vec::new();
-            let mut font: Option<FontArc> = None;
+            let font = font;
 
             loop {
                 // Check for new requests
@@ -192,13 +197,6 @@ impl AppState {
                 if pending_requests.is_empty() {
                     thread::sleep(std::time::Duration::from_millis(10));
                     continue;
-                }
-
-                // Lazy load font on first use
-                if font.is_none() {
-                    font = std::fs::read("C:\\Windows\\Fonts\\arial.ttf")
-                        .ok()
-                        .and_then(|data| FontArc::try_from_vec(data).ok());
                 }
 
                 // Re-prioritize: items in visible_indices first
