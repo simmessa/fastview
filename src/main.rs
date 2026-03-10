@@ -541,6 +541,7 @@ impl AppState {
                 } else {
                     self.renderer.zoom(amount);
                 }
+                self.update_window_title();
                 self.window.request_redraw();
             }
             InputAction::Pan(dx, dy) => {
@@ -1120,7 +1121,7 @@ impl AppState {
                 }
 
                 title.push_str(&format!(
-                    " - {} [{}/{}] [{}zoom:{}]",
+                    " - {} [{}/{}] [{}|zoom:{}]",
                     path.to_string_lossy(),
                     self.image_loader.get_current_index() + 1,
                     self.image_loader.get_image_count(),
