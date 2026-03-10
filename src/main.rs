@@ -1122,7 +1122,7 @@ impl AppState {
                 }
 
                 title.push_str(&format!(
-                    " - {} [{}/{}] [{}|zoom:{}]",
+                    " - {} [{}/{}] [{} | zoom:{}]",
                     path.to_string_lossy(),
                     self.image_loader.get_current_index() + 1,
                     self.image_loader.get_image_count(),
